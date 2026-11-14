@@ -1,5 +1,7 @@
 import json
+from io import BytesIO
 from datetime import datetime, timezone
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import streamlit as st
 import pandas as pd
@@ -8,6 +10,26 @@ from caveclient import CAVEclient
 
 DATASTACK = "minnie65_public"
 EXAMPLE_ID = 864691136968109774
+
+
+def build_export_bundle(manifest, tables):
+    """Package result tables with the query settings and data provenance."""
+    bundle = BytesIO()
+    with ZipFile(bundle, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("query.json", json.dumps(manifest, indent=2, ensure_ascii=False))
+        archive.writestr(
+            "README.txt",
+            "MICrONS Connectome Explorer analysis export\n\n"
+            "query.json records the selected IDs, filters, datastack, and materialization.\n"
+            "CSV tables contain the results shown by the app for this analysis.\n"
+            "Synapse counts describe reconstructed anatomical synapses; they are not a direct\n"
+            "measurement of functional connection strength. Root IDs and results may change\n"
+            "between materializations as neuron reconstructions are revised.\n",
+        )
+        for filename, frame in tables.items():
+            if frame is not None and not frame.empty:
+                archive.writestr(filename, frame.to_csv(index=False).encode("utf-8-sig"))
+    return bundle.getvalue()
 
 
 def summarize_direction(synapses, partner_column, result_column):
@@ -154,10 +176,10 @@ def parse_root_ids(text):
     return ids
 
 
-def analyze_group(client, root_ids):
+def analyze_group(client, root_ids, progress_callback=None):
     partner_rows = []
     neuron_rows = []
-    for root_id in root_ids:
+    for index, root_id in enumerate(root_ids, start=1):
         outgoing = client.materialize.synapse_query(pre_ids=root_id, remove_autapses=True)
         incoming = client.materialize.synapse_query(post_ids=root_id, remove_autapses=True)
         neuron_rows.append({
@@ -176,6 +198,8 @@ def analyze_group(client, root_ids):
             counts = frame.groupby(column).size()
             for partner_id, count in counts.items():
                 partner_rows.append({"Neuron root ID": root_id, "Partner root ID": int(partner_id), "Direction": direction, "Synapses": int(count)})
+        if progress_callback:
+            progress_callback(index, len(root_ids), root_id)
 
     per_neuron = pd.DataFrame(neuron_rows)
     if partner_rows:
@@ -202,16 +226,17 @@ with st.sidebar:
         try:
             saved = json.load(saved_query_file)
             query = saved.get("query", saved)
+            display = saved.get("display", {})
             st.session_state["root_id_input"] = str(query.get("root_id", EXAMPLE_ID))
             st.session_state["comparison_root_input"] = str(query.get("comparison_root_id") or "")
             st.session_state["group_ids_input"] = "\n".join(map(str, query.get("group_root_ids", [])))
-            st.session_state["top_n_input"] = int(query.get("top_n", 25))
+            st.session_state["top_n_input"] = int(display.get("top_n", query.get("top_n", 25)))
             st.session_state["min_synapses_input"] = int(query.get("min_synapses", 1))
             st.session_state["annotations_input"] = bool(query.get("add_annotations", True))
             st.session_state["functional_match_input"] = query.get("functional_match", "Manual (higher confidence)")
-            st.session_state["class_filter_input"] = query.get("class_filter", "All")
-            st.session_state["proofreading_filter_input"] = query.get("proofreading_filter", "All")
-            st.session_state["cell_type_filter_input"] = query.get("cell_type_filter", "")
+            st.session_state["class_filter_input"] = display.get("class_filter", query.get("class_filter", "All"))
+            st.session_state["proofreading_filter_input"] = display.get("proofreading_filter", query.get("proofreading_filter", "All"))
+            st.session_state["cell_type_filter_input"] = display.get("cell_type_filter", query.get("cell_type_filter", ""))
             st.session_state["replay_materialization"] = saved.get("materialization")
             st.success("Settings loaded. Run the query or group analysis to repeat it.")
         except Exception as exc:
@@ -328,6 +353,12 @@ if run_query:
             "outgoing_count": len(outgoing),
             "incoming_count": len(incoming),
         }
+        st.session_state["query_settings"] = {
+            "top_n": int(top_n),
+            "min_synapses": int(min_synapses),
+            "add_annotations": bool(add_annotations),
+            "functional_match": functional_match,
+        }
         st.session_state["annotation_warnings"] = annotation_warnings
         st.session_state["functional_properties"] = functional_properties
         st.session_state["functional_warning"] = functional_warning
@@ -351,7 +382,17 @@ if run_group:
             replay_version = st.session_state.get("replay_materialization")
             if replay_version is not None:
                 group_client.version = replay_version
-            group_per_neuron, group_partners = analyze_group(group_client, group_root_ids)
+            group_progress = st.progress(0, text="Starting group analysis...")
+
+            def update_group_progress(completed, total, root_id):
+                group_progress.progress(
+                    completed / total,
+                    text=f"Queried neuron {completed} of {total} · {root_id}",
+                )
+
+            group_per_neuron, group_partners = analyze_group(
+                group_client, group_root_ids, progress_callback=update_group_progress
+            )
             group_materialization = getattr(group_client, "version", "latest public version")
         st.session_state["group_per_neuron"] = group_per_neuron
         st.session_state["group_partners"] = group_partners
@@ -391,6 +432,7 @@ if "all_partners" in st.session_state:
         f"materialization {meta['materialization']} · "
         f"outputs {meta['outgoing_count']:,} / inputs {meta['incoming_count']:,}"
     )
+    query_settings = st.session_state.get("query_settings", {})
     query_manifest = {
         "format": "microns-mouse-tool-query-v1",
         "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -400,10 +442,10 @@ if "all_partners" in st.session_state:
             "root_id": int(meta["root_id"]),
             "comparison_root_id": st.session_state.get("comparison_root_id"),
             "group_root_ids": [],
+            **query_settings,
+        },
+        "display": {
             "top_n": int(top_n),
-            "min_synapses": int(min_synapses),
-            "add_annotations": bool(add_annotations),
-            "functional_match": st.session_state.get("functional_match", functional_match),
             "class_filter": class_filter,
             "proofreading_filter": proofreading_filter,
             "cell_type_filter": cell_type_filter,
@@ -503,6 +545,7 @@ if "all_partners" in st.session_state:
             )
 
     comparison_root_id = st.session_state.get("comparison_root_id")
+    comparison_export = pd.DataFrame()
     if comparison_root_id is not None:
         st.subheader("Compare connectivity with another neuron")
         comparison_metrics = st.session_state["comparison_metrics"]
@@ -531,6 +574,7 @@ if "all_partners" in st.session_state:
         comparison_view = comparison_view.sort_values(
             ["Shared", "A total", "B total"], ascending=[False, False, False]
         ).head(top_n)
+        comparison_export = comparison_view
         if comparison_view.empty:
             st.warning("No partners matched those filters.")
         else:
@@ -592,6 +636,18 @@ if "all_partners" in st.session_state:
             file_name=f"microns_connectivity_{meta['root_id']}.csv",
             mime="text/csv",
         )
+    export_tables = {
+        "connectivity.csv": partners,
+        "visual_response.csv": st.session_state.get("functional_properties", pd.DataFrame()),
+        "comparison.csv": comparison_export,
+    }
+    st.download_button(
+        "Download complete analysis bundle (.zip)",
+        data=build_export_bundle(query_manifest, export_tables),
+        file_name=f"microns_analysis_{meta['root_id']}.zip",
+        mime="application/zip",
+        help="Includes CSV result tables, query settings, and the selected MICrONS materialization.",
+    )
     st.caption(
         "Synapses provide anatomical evidence; their count is not a direct measure of functional strength. "
         "Proofreading status indicates which parts of the reconstruction were reviewed."
@@ -622,3 +678,17 @@ if "group_per_neuron" in st.session_state:
     st.dataframe(group_partners_view, hide_index=True, use_container_width=True)
     st.download_button("Download group partner summary (.csv)", group_partners_view.to_csv(index=False).encode("utf-8-sig"),
                        file_name="microns_group_partners.csv", mime="text/csv", key="group_partners_csv")
+    st.download_button(
+        "Download complete group bundle (.zip)",
+        data=build_export_bundle(
+            group_manifest,
+            {
+                "per_neuron.csv": st.session_state["group_per_neuron"],
+                "group_partners.csv": group_partners_view,
+            },
+        ),
+        file_name="microns_group_analysis.zip",
+        mime="application/zip",
+        help="Includes group result tables, the neuron IDs, filters, and selected MICrONS materialization.",
+        key="group_analysis_bundle",
+    )
