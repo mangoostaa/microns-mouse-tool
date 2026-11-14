@@ -93,6 +93,23 @@ def add_partner_annotations(client, partners):
     return partners, warnings
 
 
+def query_functional_properties(client, root_id, property_table):
+    nuclei = client.materialize.tables.nucleus_detection_v0(pt_root_id=root_id).query()
+    if nuclei.empty or "id" not in nuclei.columns:
+        return pd.DataFrame()
+
+    nucleus_ids = [int(value) for value in nuclei["id"].dropna().unique().tolist()]
+    records = []
+    for nucleus_id in nucleus_ids:
+        table_query = getattr(client.materialize.tables, property_table)
+        result = table_query(id=nucleus_id).query()
+        if not result.empty:
+            records.append(result)
+    if not records:
+        return pd.DataFrame()
+    return pd.concat(records, ignore_index=True)
+
+
 st.set_page_config(page_title="MICrONS · Conexiones", page_icon="🧠", layout="wide")
 st.title("MICrONS · Explorador de conexiones")
 st.caption("Explora conexiones de entrada y salida, con anotaciones del conectoma del ratón.")
@@ -128,6 +145,11 @@ with st.sidebar:
         placeholder="por ejemplo BC o 23P",
         disabled=not add_annotations,
     )
+    functional_match = st.selectbox(
+        "Enlace con actividad visual",
+        ["Manual (más confiable)", "Automático (más cobertura)"],
+        help="La correspondencia automática puede incluir más neuronas, pero no fue revisada manualmente.",
+    )
     run_query = st.button("Consultar MICrONS", type="primary", use_container_width=True)
 
 st.info("La consulta usa CAVE y descarga solo las sinapsis de la neurona seleccionada.")
@@ -158,6 +180,18 @@ if run_query:
             if add_annotations and not partners.empty:
                 partners, annotation_warnings = add_partner_annotations(client, partners)
 
+            functional_table = (
+                "digital_twin_properties_bcm_coreg_v4"
+                if functional_match == "Manual (más confiable)"
+                else "digital_twin_properties_bcm_coreg_auto_phase3_fwd_v2"
+            )
+            functional_properties = pd.DataFrame()
+            functional_warning = None
+            try:
+                functional_properties = query_functional_properties(client, root_id, functional_table)
+            except Exception as exc:
+                functional_warning = type(exc).__name__
+
         st.session_state["all_partners"] = partners
         st.session_state["query_meta"] = {
             "root_id": root_id,
@@ -167,6 +201,9 @@ if run_query:
             "incoming_count": len(incoming),
         }
         st.session_state["annotation_warnings"] = annotation_warnings
+        st.session_state["functional_properties"] = functional_properties
+        st.session_state["functional_warning"] = functional_warning
+        st.session_state["functional_match"] = functional_match
     except ValueError:
         st.error("El ID debe ser un número entero (pt_root_id).")
     except Exception as exc:
@@ -202,6 +239,60 @@ if "all_partners" in st.session_state:
         f"materialización {meta['materialization']} · "
         f"salidas {meta['outgoing_count']:,} / entradas {meta['incoming_count']:,}"
     )
+
+    st.subheader("Respuesta visual")
+    st.caption(f"Correspondencia {st.session_state.get('functional_match', functional_match).lower()} entre registro visual y neurona reconstruida.")
+    functional_warning = st.session_state.get("functional_warning")
+    functional_properties = st.session_state.get("functional_properties", pd.DataFrame())
+    if functional_warning:
+        st.warning(f"No se pudieron consultar las propiedades visuales ({functional_warning}).")
+    elif functional_properties.empty:
+        st.info(
+            "No encontramos un registro visual asociado con esta neurona usando la correspondencia seleccionada. "
+            "Prueba la opción automática o consulta otra neurona."
+        )
+    else:
+        functional_columns = [
+            "session",
+            "scan_idx",
+            "unit_id",
+            "pref_ori",
+            "pref_dir",
+            "OSI",
+            "DSI",
+            "gOSI",
+            "gDSI",
+            "cc_abs",
+            "cc_norm",
+            "residual",
+            "score",
+        ]
+        functional_columns = [column for column in functional_columns if column in functional_properties.columns]
+        functional_table_view = functional_properties[functional_columns].copy()
+        if "cc_abs" in functional_table_view.columns:
+            functional_table_view = functional_table_view.sort_values("cc_abs", ascending=False)
+        functional_table_view = functional_table_view.rename(
+            columns={
+                "session": "Sesión",
+                "scan_idx": "Escaneo",
+                "unit_id": "Registro",
+                "pref_ori": "Orientación preferida (°)",
+                "pref_dir": "Dirección preferida (°)",
+                "OSI": "Selectividad de orientación (OSI)",
+                "DSI": "Selectividad de dirección (DSI)",
+                "gOSI": "Selectividad global de orientación",
+                "gDSI": "Selectividad global de dirección",
+                "cc_abs": "Ajuste del modelo (cc_abs)",
+                "cc_norm": "Ajuste normalizado (cc_norm)",
+                "residual": "Error de correspondencia (µm)",
+                "score": "Separación de correspondencia (µm)",
+            }
+        )
+        st.dataframe(functional_table_view, hide_index=True, use_container_width=True)
+        st.caption(
+            "La orientación preferida indica el ángulo de patrón visual; la dirección preferida indica hacia dónde se mueve. "
+            "Si hay varios registros, se muestran todos. Las medidas describen la respuesta modelada, no una grabación en vivo."
+        )
 
     st.subheader("Vista tridimensional")
     st.caption(

@@ -37,10 +37,13 @@ Se inicia también desde PowerShell con `.\.venv\Scripts\python.exe -m streamlit
 - La app consulta conexiones de entrada y salida y ordena los socios por total de sinapsis.
 - Filtra por clase celular, estado de proofreading y texto del tipo celular (por ejemplo, `BC` o `23P`).
 - Activa el enriquecimiento para añadir clasificaciones y estado/estrategia de proofreading a los socios.
+- Consulta propiedades visuales asociadas a la neurona, como orientación/dirección preferida y selectividad; puedes elegir una correspondencia manual o automática.
 - Genera un enlace de Neuroglancer para ver la neurona consultada y sus entradas/salidas en 3D.
 - Exporta a CSV la lista resultante después de aplicar los filtros.
 
 Generar la vista 3D guarda un estado visual (IDs y ubicaciones de sinapsis) en el servicio público de estados Neuroglancer de MICrONS para que el enlace pueda abrirse y compartirse.
+
+Las propiedades visuales provienen de tablas Digital Twin de MICrONS. La correspondencia manual tiene menos registros pero mayor revisión; la automática cubre más células y puede tener errores. Si no hay asociación para la neurona, se muestra un mensaje en lugar de inferir una respuesta.
 - Consulta y descarga los resultados como CSV.
 
 Las consultas usan la última materialización pública disponible en CAVE. Los socios se cuentan por número de sinapsis; este valor no equivale directamente a fuerza funcional. Para consistencia en análisis científicos, registra la versión de materialización indicada por la app.
@@ -50,3 +53,4 @@ Las consultas usan la última materialización pública disponible en CAVE. Los 
 - Portal: https://www.microns-explorer.org/cortical-mm3
 - Configuración CAVE: https://tutorial.microns-explorer.org/quickstart_notebooks/01-caveclient-setup.html
 - Consulta de sinapsis: https://tutorial.microns-explorer.org/quickstart_notebooks/04-cave-query-synapses.html
+- Propiedades visuales: https://tutorial.microns-explorer.org/annotation-tables.html
