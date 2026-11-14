@@ -1,58 +1,74 @@
-# MICrONS · Explorador de conexiones
+# MICrONS Mouse Connectome Explorer
 
-Prototipo local y gratuito para consultar desde un ID de neurona sus socios, con sinapsis de entrada y salida en la misma tabla, anotaciones y exportación CSV.
+A free, local Streamlit app for exploring neuronal connectivity in the MICrONS mouse visual-cortex dataset. Enter a neuron ID to inspect its incoming and outgoing synaptic partners, review cell annotations, compare two neurons, inspect available visual-response summaries, and open a 3D Neuroglancer view.
 
-## Requisitos
+The app runs on your computer and queries the public MICrONS/CAVE services directly. It does not use an AI API or a paid hosted service.
 
-- Windows y Python 3.10 o posterior.
-- Internet para consultar los servicios públicos de MICrONS/CAVE.
-- Cuenta y token CAVE para el datastack público `minnie65_public`.
+## Features
 
-La aplicación no envía datos a un servidor propio ni necesita una clave de IA. Las consultas recuperan únicamente las sinapsis de la neurona seleccionada.
+- **Connectivity explorer:** query input and output synapses for a neuron and rank its partners by synapse count.
+- **Cell annotations:** optionally enrich partners with cell type, classification, and proofreading information; filter the results by annotation, proofreading status, or text.
+- **Two-neuron comparison:** compare shared input or output partners and see overlap statistics.
+- **Visual-response summaries:** view available Digital Twin properties such as preferred orientation/direction and selectivity, with manual or automated correspondence options. A plot summarizes available cells; it is not a raw response trace or a full tuning curve.
+- **3D view:** create a Neuroglancer link showing the queried neuron and its synaptic partners.
+- **CSV export:** download the filtered connectivity results for further analysis.
 
-## Primer inicio
+## Requirements
 
-1. Instala Python si no está instalado: https://www.python.org/downloads/windows/ (activa “Add Python to PATH”).
-2. Entra en CAVE con una cuenta Google asociada y acepta las condiciones de acceso al conjunto: https://global.daf-apis.com/
-3. Abre PowerShell en esta carpeta y ejecuta el comando para iniciar la creación del token:
+- Windows 10/11 (the included launcher is a Windows batch file).
+- Python 3.10 or later.
+- Internet access to MICrONS/CAVE and Neuroglancer services.
+- A CAVE token associated with an account that has accepted the MICrONS dataset Terms of Service.
+
+## Setup
+
+1. Install Python from [python.org](https://www.python.org/downloads/windows/). Enable **Add Python to PATH** in the installer.
+2. Sign in to the [MICrONS/CAVE portal](https://global.daf-apis.com/) with your Google account and accept the dataset Terms of Service.
+3. In PowerShell, open this project directory and run the launcher:
 
    ```powershell
-   .\.venv\Scripts\python.exe -c "from caveclient import CAVEclient; c=CAVEclient(); c.auth.setup_token(make_new=True)"
+   .\INICIAR.bat
    ```
 
-   Se abrirá CAVE en el navegador para iniciar sesión y generar el token. Copia el token de esa página y guárdalo localmente ejecutando:
+   On first launch, it creates a local virtual environment and installs the packages in `requirements.txt`. Streamlit then opens the app at `http://localhost:8501`.
+
+4. If CAVE asks for authentication, create a token at [the CAVE token page](https://global.daf-apis.com/auth/api/v1/create_token), then save it locally. After the launcher has created `.venv`, run:
 
    ```powershell
-   .\.venv\Scripts\python.exe -c "from caveclient import CAVEclient; c=CAVEclient(); token=input('Pega aquí el token de CAVE: ').strip(); c.auth.save_token(token=token)"
+   .\.venv\Scripts\python.exe -c "from caveclient import CAVEclient; c=CAVEclient(); token=input('Paste your CAVE token: ').strip(); c.auth.save_token(token=token, overwrite=True)"
    ```
 
-   No compartas el token. Se guarda en la configuración local de CAVE, no en los archivos del proyecto.
-4. Haz doble clic en `INICIAR.bat`. La primera vez instalará las bibliotecas gratuitas y abrirá la app en el navegador.
+   The command stores the token in CAVE's user configuration, outside this repository. `overwrite=True` replaces an existing locally saved token. Never paste a token into source files, GitHub, screenshots, or issue reports. Creating a replacement token may invalidate the previous one.
 
-Se inicia también desde PowerShell con `.\.venv\Scripts\python.exe -m streamlit run app.py`.
+To start the app manually after setup:
 
-## Uso
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app.py
+```
 
-- Pega un `pt_root_id`; el ejemplo inicial pertenece al tutorial oficial.
-- La app consulta conexiones de entrada y salida y ordena los socios por total de sinapsis.
-- Introduce un segundo `pt_root_id` opcional para comparar socios de entrada/salida compartidos y el porcentaje de superposición.
-- Filtra por clase celular, estado de proofreading y texto del tipo celular (por ejemplo, `BC` o `23P`).
-- Activa el enriquecimiento para añadir clasificaciones y estado/estrategia de proofreading a los socios.
-- Consulta propiedades visuales asociadas a la neurona, como orientación/dirección preferida y selectividad; puedes elegir una correspondencia manual o automática.
-- Grafica el resumen visual de las neuronas con correspondencia funcional disponible (orientación preferida frente a selectividad; no es una curva completa de respuesta).
-- Genera un enlace de Neuroglancer para ver la neurona consultada y sus entradas/salidas en 3D.
-- Exporta a CSV la lista resultante después de aplicar los filtros.
+## Using the app
 
-Generar la vista 3D guarda un estado visual (IDs y ubicaciones de sinapsis) en el servicio público de estados Neuroglancer de MICrONS para que el enlace pueda abrirse y compartirse.
+1. Enter a MICrONS `pt_root_id` (root IDs can change as neuron reconstructions are revised).
+2. Choose the connectivity directions and, if useful, enable annotation enrichment and filters.
+3. Optionally enter a second root ID to compare partners.
+4. Review the connectivity table, available visual-response summary, and CSV download.
+5. Generate a Neuroglancer view when you want to inspect the selected neurons in 3D.
 
-Las propiedades visuales provienen de tablas Digital Twin de MICrONS. La correspondencia manual tiene menos registros pero mayor revisión; la automática cubre más células y puede tener errores. Si no hay asociación para la neurona, se muestra un mensaje en lugar de inferir una respuesta.
-- Consulta y descarga los resultados como CSV.
+Synapse counts describe the number of reconstructed synapses in the queried materialization; they are not a direct measurement of functional connection strength. Record the CAVE materialization/version shown by the app when you need reproducible analysis. Not every neuron has a corresponding functional record.
 
-Las consultas usan la última materialización pública disponible en CAVE. Los socios se cuentan por número de sinapsis; este valor no equivale directamente a fuerza funcional. Para consistencia en análisis científicos, registra la versión de materialización indicada por la app.
+### 3D link and data sharing
 
-## Fuentes
+The Neuroglancer state service stores the view state needed to open a generated link. That state can include neuron IDs and synapse locations, and anyone with the link may be able to view it. Do not create or share a link for data you need to keep private.
 
-- Portal: https://www.microns-explorer.org/cortical-mm3
-- Configuración CAVE: https://tutorial.microns-explorer.org/quickstart_notebooks/01-caveclient-setup.html
-- Consulta de sinapsis: https://tutorial.microns-explorer.org/quickstart_notebooks/04-cave-query-synapses.html
-- Propiedades visuales: https://tutorial.microns-explorer.org/annotation-tables.html
+## Data and references
+
+- [MICrONS Explorer: cortical mm³](https://www.microns-explorer.org/cortical-mm3)
+- [CAVE client setup](https://tutorial.microns-explorer.org/quickstart_notebooks/01-caveclient-setup.html)
+- [Querying synapses](https://tutorial.microns-explorer.org/quickstart_notebooks/04-cave-query-synapses.html)
+- [MICrONS annotation tables and functional properties](https://tutorial.microns-explorer.org/annotation-tables.html)
+- [Neuroglancer and NGLui tutorial](https://tutorial.microns-explorer.org/quickstart_notebooks/09-nglui-neuroglancer.html)
+- MICrONS Consortium, *Nature* (2025), [DOI: 10.1038/s41586-025-08790-w](https://doi.org/10.1038/s41586-025-08790-w)
+
+## License
+
+No license is currently included in this repository. Ask the repository owner before redistributing or reusing the code.
