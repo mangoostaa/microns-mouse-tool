@@ -9,6 +9,8 @@ The app runs on your computer and queries the public MICrONS/CAVE services direc
 - **Connectivity explorer:** query input and output synapses for a neuron and rank its partners by synapse count.
 - **Cell annotations:** optionally enrich partners with cell type, classification, and proofreading information; filter the results by annotation, proofreading status, or text.
 - **Two-neuron comparison:** compare shared input or output partners and see overlap statistics.
+- **Saved, repeatable queries:** export a JSON query file with neuron IDs, filters, datastack, and CAVE materialization. Load it later to restore the settings and rerun the analysis against that saved materialization when it is available.
+- **Group analysis:** submit up to 50 neuron root IDs to get per-neuron input/output summaries and a ranked list of partners shared across the group, with the fraction of queried neurons connected to each partner. Export both tables as CSV.
 - **Visual-response summaries:** view available Digital Twin properties such as preferred orientation/direction and selectivity, with manual or automated correspondence options. A plot summarizes available cells; it is not a raw response trace or a full tuning curve.
 - **3D view:** create a Neuroglancer link showing the queried neuron and its synaptic partners.
 - **CSV export:** download the filtered connectivity results for further analysis.
@@ -48,11 +50,13 @@ To start the app manually after setup:
 
 ## Using the app
 
-1. Enter a MICrONS `pt_root_id` (root IDs can change as neuron reconstructions are revised).
-2. Choose the connectivity directions and, if useful, enable annotation enrichment and filters.
-3. Optionally enter a second root ID to compare partners.
-4. Review the connectivity table, available visual-response summary, and CSV download.
-5. Generate a Neuroglancer view when you want to inspect the selected neurons in 3D.
+1. Enter a MICrONS `pt_root_id` (root IDs can change as neuron reconstructions are revised) and run the query.
+2. Optionally add a second ID to compare partner overlap. Enable annotations and filters as needed.
+3. Download a JSON file to save the query settings and data provenance. Load this file from the sidebar later, apply its settings, and run the query again.
+4. For population analysis, paste up to 50 IDs into **Group analysis** (one per line, comma, or semicolon). The tool reports counts for each neuron and summarizes partners by how many group members connect to them.
+5. Download the group tables as CSV, review visual-response summaries, or generate a Neuroglancer view for 3D inspection.
+
+Group analysis makes two CAVE synapse queries per neuron (input and output), so larger lists can take longer. Queries are run from your computer using your CAVE credentials.
 
 Synapse counts describe the number of reconstructed synapses in the queried materialization; they are not a direct measurement of functional connection strength. Record the CAVE materialization/version shown by the app when you need reproducible analysis. Not every neuron has a corresponding functional record.
 

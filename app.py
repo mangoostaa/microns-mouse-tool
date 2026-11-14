@@ -1,3 +1,6 @@
+import json
+from datetime import datetime, timezone
+
 import streamlit as st
 import pandas as pd
 from caveclient import CAVEclient
@@ -10,19 +13,19 @@ EXAMPLE_ID = 864691136968109774
 def summarize_direction(synapses, partner_column, result_column):
     if synapses.empty:
         return pd.DataFrame(
-            {"ID socio": pd.Series(dtype="uint64"), result_column: pd.Series(dtype="int64")}
+            {"Partner ID": pd.Series(dtype="uint64"), result_column: pd.Series(dtype="int64")}
         )
     return (
         synapses.groupby(partner_column, as_index=False)
         .size()
-        .rename(columns={partner_column: "ID socio", "size": result_column})
+        .rename(columns={partner_column: "Partner ID", "size": result_column})
     )
 
 
 def merge_root_annotations(partners, annotations):
     left = partners.copy()
     right = annotations.copy()
-    left["_join_root_id"] = left["ID socio"].astype("string")
+    left["_join_root_id"] = left["Partner ID"].astype("string")
     right["_join_root_id"] = right["pt_root_id"].astype("string")
     return left.merge(right.drop(columns="pt_root_id"), on="_join_root_id", how="left").drop(
         columns="_join_root_id"
@@ -31,7 +34,7 @@ def merge_root_annotations(partners, annotations):
 
 def add_partner_annotations(client, partners):
     warnings = []
-    partner_ids = [int(value) for value in partners["ID socio"].tolist()]
+    partner_ids = [int(value) for value in partners["Partner ID"].tolist()]
 
     try:
         cell_types = client.materialize.tables.aibs_metamodel_celltypes_v661(
@@ -42,20 +45,20 @@ def add_partner_annotations(client, partners):
             cell_types = cell_types[selected].drop_duplicates("pt_root_id", keep="last")
             partners = merge_root_annotations(partners, cell_types)
             partners = partners.rename(
-                columns={"classification_system": "Clase celular", "cell_type": "Tipo celular"}
+                columns={"classification_system": "Cell class", "cell_type": "Cell type"}
             )
-            if "Clase celular" in partners:
+            if "Cell class" in partners:
                 class_names = {
-                    "excitatory_neuron": "Neurona excitatoria",
-                    "inhibitory_neuron": "Neurona inhibitoria",
-                    "nonneuron": "No neuronal",
+                    "excitatory_neuron": "Excitatory neuron",
+                    "inhibitory_neuron": "Inhibitory neuron",
+                    "nonneuron": "Non-neuronal",
                 }
-                partners["Clase celular"] = partners["Clase celular"].replace(class_names)
-                partners["Clase celular"] = partners["Clase celular"].fillna("Sin clasificación")
-            if "Tipo celular" in partners:
-                partners["Tipo celular"] = partners["Tipo celular"].fillna("Sin anotación")
+                partners["Cell class"] = partners["Cell class"].replace(class_names)
+                partners["Cell class"] = partners["Cell class"].fillna("Unclassified")
+            if "Cell type" in partners:
+                partners["Cell type"] = partners["Cell type"].fillna("Unannotated")
     except Exception as exc:
-        warnings.append(f"tipos celulares ({type(exc).__name__})")
+        warnings.append(f"cell types ({type(exc).__name__})")
 
     try:
         proofreading = client.materialize.tables.proofreading_status_and_strategy(
@@ -75,18 +78,18 @@ def add_partner_annotations(client, partners):
             partners = merge_root_annotations(partners, proofreading)
             partners = partners.rename(
                 columns={
-                    "status_axon": "Axón revisado",
-                    "strategy_axon": "Estrategia del axón",
-                    "status_dendrite": "Dendrita revisada",
-                    "strategy_dendrite": "Estrategia de la dendrita",
+                    "status_axon": "Axon proofread",
+                    "strategy_axon": "Axon strategy",
+                    "status_dendrite": "Dendrite proofread",
+                    "strategy_dendrite": "Dendrite strategy",
                 }
             )
-            for column in ["Axón revisado", "Dendrita revisada"]:
+            for column in ["Axon proofread", "Dendrite proofread"]:
                 if column in partners:
-                    partners[column] = partners[column].map({True: "Sí", False: "No"}).fillna("Sin dato")
-            for column in ["Estrategia del axón", "Estrategia de la dendrita"]:
+                    partners[column] = partners[column].map({True: "Yes", False: "No"}).fillna("Not available")
+            for column in ["Axon strategy", "Dendrite strategy"]:
                 if column in partners:
-                    partners[column] = partners[column].fillna("Sin dato")
+                    partners[column] = partners[column].fillna("Not available")
     except Exception as exc:
         warnings.append(f"proofreading ({type(exc).__name__})")
 
@@ -112,24 +115,24 @@ def query_functional_properties(client, root_id, property_table):
 
 def build_comparison(primary_out, primary_in, comparison_out, comparison_in):
     pairs = [
-        (primary_out, "post_pt_root_id", "A: salida"),
-        (primary_in, "pre_pt_root_id", "A: entrada"),
-        (comparison_out, "post_pt_root_id", "B: salida"),
-        (comparison_in, "pre_pt_root_id", "B: entrada"),
+        (primary_out, "post_pt_root_id", "A: output"),
+        (primary_in, "pre_pt_root_id", "A: input"),
+        (comparison_out, "post_pt_root_id", "B: output"),
+        (comparison_in, "pre_pt_root_id", "B: input"),
     ]
     summary = None
     for synapses, partner_column, count_column in pairs:
         counts = summarize_direction(synapses, partner_column, count_column)
-        summary = counts if summary is None else summary.merge(counts, on="ID socio", how="outer")
-    count_columns = ["A: salida", "A: entrada", "B: salida", "B: entrada"]
+        summary = counts if summary is None else summary.merge(counts, on="Partner ID", how="outer")
+    count_columns = ["A: output", "A: input", "B: output", "B: input"]
     summary[count_columns] = summary[count_columns].fillna(0).astype("int64")
-    summary["En común"] = (
-        ((summary["A: salida"] > 0) & (summary["B: salida"] > 0))
-        | ((summary["A: entrada"] > 0) & (summary["B: entrada"] > 0))
-    ).map({True: "Sí", False: "No"})
-    summary["Total A"] = summary["A: salida"] + summary["A: entrada"]
-    summary["Total B"] = summary["B: salida"] + summary["B: entrada"]
-    return summary.sort_values(["En común", "Total A", "Total B"], ascending=[False, False, False])
+    summary["Shared"] = (
+        ((summary["A: output"] > 0) & (summary["B: output"] > 0))
+        | ((summary["A: input"] > 0) & (summary["B: input"] > 0))
+    ).map({True: "Yes", False: "No"})
+    summary["A total"] = summary["A: output"] + summary["A: input"]
+    summary["B total"] = summary["B: output"] + summary["B: input"]
+    return summary.sort_values(["Shared", "A total", "B total"], ascending=[False, False, False])
 
 
 def jaccard_overlap(primary, comparison, partner_column):
@@ -139,63 +142,109 @@ def jaccard_overlap(primary, comparison, partner_column):
     return len(primary_ids & comparison_ids), (len(primary_ids & comparison_ids) / len(union) if union else 0.0)
 
 
-st.set_page_config(page_title="MICrONS · Conexiones", page_icon="🧠", layout="wide")
-st.title("MICrONS · Explorador de conexiones")
-st.caption("Explora conexiones de entrada y salida, con anotaciones del conectoma del ratón.")
+def parse_root_ids(text):
+    values = [part.strip() for part in text.replace(",", "\n").replace(";", "\n").splitlines()]
+    ids = [int(value) for value in values if value]
+    if not ids:
+        raise ValueError("Enter at least one neuron root ID.")
+    if len(ids) > 50:
+        raise ValueError("Group analysis is limited to 50 neurons per run.")
+    if len(set(ids)) != len(ids):
+        raise ValueError("Remove duplicate neuron IDs from the group.")
+    return ids
+
+
+def analyze_group(client, root_ids):
+    partner_rows = []
+    neuron_rows = []
+    for root_id in root_ids:
+        outgoing = client.materialize.synapse_query(pre_ids=root_id, remove_autapses=True)
+        incoming = client.materialize.synapse_query(post_ids=root_id, remove_autapses=True)
+        neuron_rows.append({
+            "Neuron root ID": root_id,
+            "Output synapses": len(outgoing),
+            "Input synapses": len(incoming),
+            "Unique output partners": outgoing["post_pt_root_id"].nunique() if "post_pt_root_id" in outgoing else 0,
+            "Unique input partners": incoming["pre_pt_root_id"].nunique() if "pre_pt_root_id" in incoming else 0,
+        })
+        for frame, column, direction in [
+            (outgoing, "post_pt_root_id", "Output"),
+            (incoming, "pre_pt_root_id", "Input"),
+        ]:
+            if column not in frame:
+                continue
+            counts = frame.groupby(column).size()
+            for partner_id, count in counts.items():
+                partner_rows.append({"Neuron root ID": root_id, "Partner root ID": int(partner_id), "Direction": direction, "Synapses": int(count)})
+
+    per_neuron = pd.DataFrame(neuron_rows)
+    if partner_rows:
+        edges = pd.DataFrame(partner_rows)
+        partners = (edges.groupby(["Partner root ID", "Direction"], as_index=False)
+                    .agg(**{"Group neurons connected": ("Neuron root ID", "nunique"),
+                            "Total synapses": ("Synapses", "sum")}))
+        partners["Group size"] = len(root_ids)
+        partners["Connected fraction"] = partners["Group neurons connected"] / len(root_ids)
+        partners = partners.sort_values(["Group neurons connected", "Total synapses"], ascending=False)
+    else:
+        partners = pd.DataFrame(columns=["Partner root ID", "Direction", "Group neurons connected", "Total synapses", "Group size", "Connected fraction"])
+    return per_neuron, partners
+
+
+st.set_page_config(page_title="MICrONS Connectome Explorer", page_icon="🧠", layout="wide")
+st.title("MICrONS Connectome Explorer")
+st.caption("Explore neuronal connectivity, cell annotations, visual-response summaries, and groups of neurons.")
 
 with st.sidebar:
-    st.header("Consulta")
-    root_id_text = st.text_input("ID de neurona (pt_root_id)", value=str(EXAMPLE_ID))
-    comparison_root_text = st.text_input("Comparar con otra neurona (opcional)", value="")
-    top_n = st.slider("Mostrar socios", min_value=5, max_value=100, value=25, step=5)
-    min_synapses = st.number_input("Mínimo de sinapsis totales por socio", min_value=1, max_value=100, value=1)
-    add_annotations = st.checkbox(
-        "Añadir tipo celular y proofreading",
-        value=True,
-        help="Consulta las anotaciones para los socios de esta neurona.",
-    )
-    class_filter = st.selectbox(
-        "Clase celular",
-        [
-            "Todas",
-            "Neurona excitatoria",
-            "Neurona inhibitoria",
-            "No neuronal",
-            "Sin clasificación",
-        ],
-        disabled=not add_annotations,
-    )
-    proofreading_filter = st.selectbox(
-        "Estado de proofreading",
-        ["Todos", "Axón revisado", "Dendrita revisada", "Ambos revisados"],
-        disabled=not add_annotations,
-    )
-    cell_type_filter = st.text_input(
-        "Tipo celular contiene",
-        placeholder="por ejemplo BC o 23P",
-        disabled=not add_annotations,
-    )
-    functional_match = st.selectbox(
-        "Enlace con actividad visual",
-        ["Manual (más confiable)", "Automático (más cobertura)"],
-        help="La correspondencia automática puede incluir más neuronas, pero no fue revisada manualmente.",
-    )
-    run_query = st.button("Consultar MICrONS", type="primary", use_container_width=True)
+    st.header("Single-neuron query")
+    saved_query_file = st.file_uploader("Load saved query settings (.json)", type=["json"])
+    if st.button("Apply saved settings", disabled=saved_query_file is None):
+        try:
+            saved = json.load(saved_query_file)
+            query = saved.get("query", saved)
+            st.session_state["root_id_input"] = str(query.get("root_id", EXAMPLE_ID))
+            st.session_state["comparison_root_input"] = str(query.get("comparison_root_id") or "")
+            st.session_state["group_ids_input"] = "\n".join(map(str, query.get("group_root_ids", [])))
+            st.session_state["top_n_input"] = int(query.get("top_n", 25))
+            st.session_state["min_synapses_input"] = int(query.get("min_synapses", 1))
+            st.session_state["annotations_input"] = bool(query.get("add_annotations", True))
+            st.session_state["functional_match_input"] = query.get("functional_match", "Manual (higher confidence)")
+            st.session_state["class_filter_input"] = query.get("class_filter", "All")
+            st.session_state["proofreading_filter_input"] = query.get("proofreading_filter", "All")
+            st.session_state["cell_type_filter_input"] = query.get("cell_type_filter", "")
+            st.session_state["replay_materialization"] = saved.get("materialization")
+            st.success("Settings loaded. Run the query or group analysis to repeat it.")
+        except Exception as exc:
+            st.error(f"Could not load this file ({type(exc).__name__}).")
+    root_id_text = st.text_input("Neuron root ID (pt_root_id)", value=str(EXAMPLE_ID), key="root_id_input")
+    comparison_root_text = st.text_input("Compare with another neuron (optional)", value="", key="comparison_root_input")
+    top_n = st.slider("Partners to display", min_value=5, max_value=100, value=25, step=5, key="top_n_input")
+    min_synapses = st.number_input("Minimum total synapses per partner", min_value=1, max_value=100, value=1, key="min_synapses_input")
+    add_annotations = st.checkbox("Add cell type and proofreading annotations", value=True, key="annotations_input")
+    class_filter = st.selectbox("Cell class", ["All", "Excitatory neuron", "Inhibitory neuron", "Non-neuronal", "Unclassified"], disabled=not add_annotations, key="class_filter_input")
+    proofreading_filter = st.selectbox("Proofreading status", ["All", "Axon proofread", "Dendrite proofread", "Both proofread"], disabled=not add_annotations, key="proofreading_filter_input")
+    cell_type_filter = st.text_input("Cell type contains", placeholder="e.g. BC or 23P", disabled=not add_annotations, key="cell_type_filter_input")
+    functional_match = st.selectbox("Visual-response correspondence", ["Manual (higher confidence)", "Automated (more coverage)"], help="Automated matching has more coverage but is not manually verified.", key="functional_match_input")
+    run_query = st.button("Run query", type="primary", use_container_width=True)
+    st.divider()
+    st.header("Group analysis")
+    group_ids_text = st.text_area("Neuron root IDs (one per line, comma, or semicolon)", key="group_ids_input")
+    run_group = st.button("Analyze group (up to 50 neurons)", use_container_width=True)
 
-st.info("La consulta usa CAVE y descarga solo las sinapsis de la neurona seleccionada.")
-st.markdown(
-    "[Abrir portal MICrONS](https://www.microns-explorer.org/cortical-mm3) · "
-    "[Cómo configurar CAVE](https://tutorial.microns-explorer.org/quickstart_notebooks/01-caveclient-setup.html)"
-)
+st.info("Queries use CAVE to retrieve synapses for each selected neuron.")
+st.markdown("[Open MICrONS portal](https://www.microns-explorer.org/cortical-mm3) · [CAVE setup guide](https://tutorial.microns-explorer.org/quickstart_notebooks/01-caveclient-setup.html)")
 
 if run_query:
     try:
         root_id = int(root_id_text.strip())
         comparison_root_id = int(comparison_root_text.strip()) if comparison_root_text.strip() else None
         if comparison_root_id == root_id:
-            raise ValueError("El ID de comparación debe ser distinto del ID principal.")
-        with st.spinner("Consultando conexiones de entrada y salida…"):
+            raise ValueError("The comparison ID must differ from the primary ID.")
+        with st.spinner("Querying incoming and outgoing connections..."):
             client = CAVEclient(DATASTACK)
+            replay_version = st.session_state.get("replay_materialization")
+            if replay_version is not None:
+                client.version = replay_version
             outgoing = client.materialize.synapse_query(pre_ids=root_id, remove_autapses=True)
             incoming = client.materialize.synapse_query(post_ids=root_id, remove_autapses=True)
 
@@ -215,20 +264,20 @@ if run_query:
                     outgoing, incoming, comparison_outgoing, comparison_incoming
                 )
                 comparison_partners = comparison_partners[
-                    (comparison_partners["Total A"] + comparison_partners["Total B"]) >= min_synapses
+                    (comparison_partners["A total"] + comparison_partners["B total"]) >= min_synapses
                 ].reset_index(drop=True)
                 if add_annotations and not comparison_partners.empty:
                     comparison_partners, _ = add_partner_annotations(client, comparison_partners)
 
-            partners = summarize_direction(outgoing, "post_pt_root_id", "Sinapsis de salida")
-            incoming_partners = summarize_direction(incoming, "pre_pt_root_id", "Sinapsis de entrada")
-            partners = partners.merge(incoming_partners, on="ID socio", how="outer")
-            partners[["Sinapsis de salida", "Sinapsis de entrada"]] = partners[
-                ["Sinapsis de salida", "Sinapsis de entrada"]
+            partners = summarize_direction(outgoing, "post_pt_root_id", "Output synapses")
+            incoming_partners = summarize_direction(incoming, "pre_pt_root_id", "Input synapses")
+            partners = partners.merge(incoming_partners, on="Partner ID", how="outer")
+            partners[["Output synapses", "Input synapses"]] = partners[
+                ["Output synapses", "Input synapses"]
             ].fillna(0).astype("int64")
-            partners["Sinapsis totales"] = partners["Sinapsis de salida"] + partners["Sinapsis de entrada"]
-            partners = partners[partners["Sinapsis totales"] >= min_synapses]
-            partners = partners.sort_values("Sinapsis totales", ascending=False).reset_index(drop=True)
+            partners["Total synapses"] = partners["Output synapses"] + partners["Input synapses"]
+            partners = partners[partners["Total synapses"] >= min_synapses]
+            partners = partners.sort_values("Total synapses", ascending=False).reset_index(drop=True)
 
             annotation_warnings = []
             if add_annotations and not partners.empty:
@@ -236,7 +285,7 @@ if run_query:
 
             functional_table = (
                 "digital_twin_properties_bcm_coreg_v4"
-                if functional_match == "Manual (más confiable)"
+                if functional_match == "Manual (higher confidence)"
                 else "digital_twin_properties_bcm_coreg_auto_phase3_fwd_v2"
             )
             functional_properties = pd.DataFrame()
@@ -275,7 +324,7 @@ if run_query:
         st.session_state["query_meta"] = {
             "root_id": root_id,
             "total_synapses": len(outgoing) + len(incoming),
-            "materialization": getattr(client, "version", "última versión pública"),
+            "materialization": getattr(client, "version", "latest public version"),
             "outgoing_count": len(outgoing),
             "incoming_count": len(incoming),
         }
@@ -289,52 +338,95 @@ if run_query:
         st.session_state["comparison_functional"] = comparison_functional
         st.session_state["comparison_functional_warning"] = comparison_functional_warning
     except ValueError:
-        st.error("El ID debe ser un número entero (pt_root_id).")
+        st.error("The ID must be an integer (pt_root_id).")
     except Exception as exc:
-        st.error("No se pudo completar la consulta. Comprueba el token de CAVE y la conexión a internet.")
-        st.caption(f"Detalle técnico: {type(exc).__name__}")
+        st.error("The query failed. Check your CAVE token and internet connection.")
+        st.caption(f"Technical detail: {type(exc).__name__}")
+
+if run_group:
+    try:
+        group_root_ids = parse_root_ids(group_ids_text)
+        with st.spinner(f"Querying synapses for {len(group_root_ids)} neurons..."):
+            group_client = CAVEclient(DATASTACK)
+            replay_version = st.session_state.get("replay_materialization")
+            if replay_version is not None:
+                group_client.version = replay_version
+            group_per_neuron, group_partners = analyze_group(group_client, group_root_ids)
+            group_materialization = getattr(group_client, "version", "latest public version")
+        st.session_state["group_per_neuron"] = group_per_neuron
+        st.session_state["group_partners"] = group_partners
+        st.session_state["group_meta"] = {"root_ids": group_root_ids, "materialization": group_materialization}
+    except ValueError as exc:
+        st.error(str(exc))
+    except Exception as exc:
+        st.error("Group analysis failed. Check your CAVE token and internet connection.")
+        st.caption(f"Technical detail: {type(exc).__name__}")
 
 if "all_partners" in st.session_state:
     meta = st.session_state["query_meta"]
     partners = st.session_state["all_partners"].copy()
 
-    if add_annotations and class_filter != "Todas" and "Clase celular" in partners:
-        partners = partners[partners["Clase celular"] == class_filter]
-    if add_annotations and proofreading_filter != "Todos":
-        if proofreading_filter in ["Axón revisado", "Ambos revisados"] and "Axón revisado" in partners:
-            partners = partners[partners["Axón revisado"] == "Sí"]
-        if proofreading_filter in ["Dendrita revisada", "Ambos revisados"] and "Dendrita revisada" in partners:
-            partners = partners[partners["Dendrita revisada"] == "Sí"]
-    if add_annotations and cell_type_filter.strip() and "Tipo celular" in partners:
+    if add_annotations and class_filter != "All" and "Cell class" in partners:
+        partners = partners[partners["Cell class"] == class_filter]
+    if add_annotations and proofreading_filter != "All":
+        if proofreading_filter in ["Axon proofread", "Both proofread"] and "Axon proofread" in partners:
+            partners = partners[partners["Axon proofread"] == "Yes"]
+        if proofreading_filter in ["Dendrite proofread", "Both proofread"] and "Dendrite proofread" in partners:
+            partners = partners[partners["Dendrite proofread"] == "Yes"]
+    if add_annotations and cell_type_filter.strip() and "Cell type" in partners:
         partners = partners[
-            partners["Tipo celular"].str.contains(cell_type_filter.strip(), case=False, na=False)
+            partners["Cell type"].str.contains(cell_type_filter.strip(), case=False, na=False)
         ]
 
-    partners = partners.sort_values("Sinapsis totales", ascending=False)
+    partners = partners.sort_values("Total synapses", ascending=False)
     filtered_count = len(partners)
     shown_partners = partners.head(top_n).reset_index(drop=True)
 
     a, b, c = st.columns(3)
-    a.metric("Sinapsis consultadas", f"{meta['total_synapses']:,}")
-    b.metric("Socios tras filtros", filtered_count)
-    c.metric("Socios mostrados", len(shown_partners))
+    a.metric("Synapses queried", f"{meta['total_synapses']:,}")
+    b.metric("Partners after filters", filtered_count)
+    c.metric("Partners shown", len(shown_partners))
     st.caption(
-        f"Neurona {meta['root_id']} · datastack {DATASTACK} · "
-        f"materialización {meta['materialization']} · "
-        f"salidas {meta['outgoing_count']:,} / entradas {meta['incoming_count']:,}"
+        f"Neuron {meta['root_id']} · datastack {DATASTACK} · "
+        f"materialization {meta['materialization']} · "
+        f"outputs {meta['outgoing_count']:,} / inputs {meta['incoming_count']:,}"
+    )
+    query_manifest = {
+        "format": "microns-mouse-tool-query-v1",
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "datastack": DATASTACK,
+        "materialization": meta["materialization"],
+        "query": {
+            "root_id": int(meta["root_id"]),
+            "comparison_root_id": st.session_state.get("comparison_root_id"),
+            "group_root_ids": [],
+            "top_n": int(top_n),
+            "min_synapses": int(min_synapses),
+            "add_annotations": bool(add_annotations),
+            "functional_match": st.session_state.get("functional_match", functional_match),
+            "class_filter": class_filter,
+            "proofreading_filter": proofreading_filter,
+            "cell_type_filter": cell_type_filter,
+        },
+    }
+    st.download_button(
+        "Save query settings and provenance (.json)",
+        data=json.dumps(query_manifest, indent=2).encode("utf-8"),
+        file_name=f"microns_query_{meta['root_id']}.json",
+        mime="application/json",
     )
 
-    st.subheader("Respuesta visual")
-    st.caption(f"Correspondencia {st.session_state.get('functional_match', functional_match).lower()} entre registro visual y neurona reconstruida.")
+    st.subheader("Visual response")
+    st.caption(f"Correspondence {st.session_state.get('functional_match', functional_match).lower()} between visual record and reconstructed neuron.")
     functional_warning = st.session_state.get("functional_warning")
     functional_properties = st.session_state.get("functional_properties", pd.DataFrame())
     if functional_warning:
-        st.warning(f"No se pudieron consultar las propiedades visuales ({functional_warning}).")
+        st.warning(f"Could not retrieve visual-response properties ({functional_warning}).")
     else:
         if functional_properties.empty:
             st.info(
-                "No encontramos un registro visual asociado con esta neurona usando la correspondencia seleccionada. "
-                "Prueba la opción automática o consulta otra neurona."
+                "No visual record was found for this neuron using the selected correspondence. "
+                "Try automated matching or query another neuron."
             )
         else:
             functional_columns = [
@@ -358,31 +450,31 @@ if "all_partners" in st.session_state:
                 functional_table_view = functional_table_view.sort_values("cc_abs", ascending=False)
             functional_table_view = functional_table_view.rename(
                 columns={
-                    "session": "Sesión",
-                    "scan_idx": "Escaneo",
-                    "unit_id": "Registro",
-                    "pref_ori": "Orientación preferida (°)",
-                    "pref_dir": "Dirección preferida (°)",
-                    "OSI": "Selectividad de orientación (OSI)",
-                    "DSI": "Selectividad de dirección (DSI)",
-                    "gOSI": "Selectividad global de orientación",
-                    "gDSI": "Selectividad global de dirección",
-                    "cc_abs": "Ajuste del modelo (cc_abs)",
-                    "cc_norm": "Ajuste normalizado (cc_norm)",
-                    "residual": "Error de correspondencia (µm)",
-                    "score": "Separación de correspondencia (µm)",
+                    "session": "Session",
+                    "scan_idx": "Scan",
+                    "unit_id": "Unit",
+                    "pref_ori": "Preferred orientation (°)",
+                    "pref_dir": "Preferred direction (°)",
+                    "OSI": "Orientation selectivity (OSI)",
+                    "DSI": "Direction selectivity (DSI)",
+                    "gOSI": "Global orientation selectivity",
+                    "gDSI": "Global direction selectivity",
+                    "cc_abs": "Model fit (cc_abs)",
+                    "cc_norm": "Normalized fit (cc_norm)",
+                    "residual": "Correspondence error (µm)",
+                    "score": "Correspondence distance (µm)",
                 }
             )
             st.dataframe(functional_table_view, hide_index=True, use_container_width=True)
             st.caption(
-                "La orientación preferida indica el ángulo de patrón visual; la dirección preferida indica hacia dónde se mueve. "
-                "Si hay varios registros, se muestran todos. Las medidas describen la respuesta modelada, no una grabación en vivo."
+                "Preferred orientation is the visual pattern angle; preferred direction indicates its motion direction. "
+                "All matching records are shown. These measures describe modeled responses, not a live recording."
             )
 
         visual_points = []
-        response_sets = [("Neurona A", functional_properties)]
+        response_sets = [("Neuron A", functional_properties)]
         if st.session_state.get("comparison_root_id") is not None:
-            response_sets.append(("Neurona B", st.session_state.get("comparison_functional", pd.DataFrame())))
+            response_sets.append(("Neuron B", st.session_state.get("comparison_functional", pd.DataFrame())))
         for neuron_label, response_table in response_sets:
             if response_table.empty or "pref_ori" not in response_table.columns:
                 continue
@@ -391,75 +483,75 @@ if "all_partners" in st.session_state:
                 continue
             points = response_table[["pref_ori", strength_column]].copy()
             points = points.rename(
-                columns={"pref_ori": "Orientación preferida (°)", strength_column: "Selectividad"}
+                columns={"pref_ori": "Preferred orientation (°)", strength_column: "Selectivity"}
             )
-            points["Neurona"] = neuron_label
+            points["Neuron"] = neuron_label
             visual_points.append(points)
         if visual_points:
-            st.markdown("**Resumen visual**")
+            st.markdown("**Visual summary**")
             st.scatter_chart(
                 pd.concat(visual_points, ignore_index=True),
-                x="Orientación preferida (°)",
-                y="Selectividad",
-                color="Neurona",
-                x_label="Orientación preferida (grados)",
-                y_label="Selectividad de orientación",
+                x="Preferred orientation (°)",
+                y="Selectivity",
+                color="Neuron",
+                x_label="Preferred orientation (degrees)",
+                y_label="Orientation selectivity",
             )
             st.caption(
-                "Cada punto es un registro funcional. El gráfico compara orientaciones preferidas y selectividad; "
-                "no representa una curva completa de respuesta a todos los estímulos."
+                "Each point is a functional record. The plot compares preferred orientation and selectivity; "
+                "it is not a full response curve across stimuli."
             )
 
     comparison_root_id = st.session_state.get("comparison_root_id")
     if comparison_root_id is not None:
-        st.subheader("Comparar conexiones con otra neurona")
+        st.subheader("Compare connectivity with another neuron")
         comparison_metrics = st.session_state["comparison_metrics"]
         metrics_cols = st.columns(4)
-        metrics_cols[0].metric("Socios de salida en común", comparison_metrics["common_outgoing"])
-        metrics_cols[1].metric("Coincidencia de salidas", f"{comparison_metrics['outgoing_jaccard']:.0%}")
-        metrics_cols[2].metric("Socios de entrada en común", comparison_metrics["common_incoming"])
-        metrics_cols[3].metric("Coincidencia de entradas", f"{comparison_metrics['incoming_jaccard']:.0%}")
+        metrics_cols[0].metric("Shared output partners", comparison_metrics["common_outgoing"])
+        metrics_cols[1].metric("Output overlap", f"{comparison_metrics['outgoing_jaccard']:.0%}")
+        metrics_cols[2].metric("Shared input partners", comparison_metrics["common_incoming"])
+        metrics_cols[3].metric("Input overlap", f"{comparison_metrics['incoming_jaccard']:.0%}")
         st.caption(
             f"A = {meta['root_id']} · B = {comparison_root_id}. "
-            "El porcentaje mide cuánto se superponen las listas de socios de cada dirección."
+            "The percentage measures overlap between partner lists in each direction."
         )
 
         comparison_view = st.session_state["comparison_partners"].copy()
-        if add_annotations and class_filter != "Todas" and "Clase celular" in comparison_view:
-            comparison_view = comparison_view[comparison_view["Clase celular"] == class_filter]
-        if add_annotations and proofreading_filter != "Todos":
-            if proofreading_filter in ["Axón revisado", "Ambos revisados"] and "Axón revisado" in comparison_view:
-                comparison_view = comparison_view[comparison_view["Axón revisado"] == "Sí"]
-            if proofreading_filter in ["Dendrita revisada", "Ambos revisados"] and "Dendrita revisada" in comparison_view:
-                comparison_view = comparison_view[comparison_view["Dendrita revisada"] == "Sí"]
-        if add_annotations and cell_type_filter.strip() and "Tipo celular" in comparison_view:
+        if add_annotations and class_filter != "All" and "Cell class" in comparison_view:
+            comparison_view = comparison_view[comparison_view["Cell class"] == class_filter]
+        if add_annotations and proofreading_filter != "All":
+            if proofreading_filter in ["Axon proofread", "Both proofread"] and "Axon proofread" in comparison_view:
+                comparison_view = comparison_view[comparison_view["Axon proofread"] == "Yes"]
+            if proofreading_filter in ["Dendrite proofread", "Both proofread"] and "Dendrite proofread" in comparison_view:
+                comparison_view = comparison_view[comparison_view["Dendrite proofread"] == "Yes"]
+        if add_annotations and cell_type_filter.strip() and "Cell type" in comparison_view:
             comparison_view = comparison_view[
-                comparison_view["Tipo celular"].str.contains(cell_type_filter.strip(), case=False, na=False)
+                comparison_view["Cell type"].str.contains(cell_type_filter.strip(), case=False, na=False)
             ]
         comparison_view = comparison_view.sort_values(
-            ["En común", "Total A", "Total B"], ascending=[False, False, False]
+            ["Shared", "A total", "B total"], ascending=[False, False, False]
         ).head(top_n)
         if comparison_view.empty:
-            st.warning("No se encontraron socios compartidos o exclusivos con esos filtros.")
+            st.warning("No partners matched those filters.")
         else:
             st.dataframe(comparison_view, hide_index=True, use_container_width=True)
             st.download_button(
-                "Descargar comparación CSV",
+                "Download comparison CSV",
                 data=comparison_view.to_csv(index=False).encode("utf-8-sig"),
                 file_name=f"microns_comparacion_{meta['root_id']}_{comparison_root_id}.csv",
                 mime="text/csv",
             )
 
-    st.subheader("Vista tridimensional")
+    st.subheader("3D view")
     st.caption(
-        "Genera un enlace de Neuroglancer con la neurona y sus sinapsis de entrada y salida. "
-        "El enlace guarda un estado visual en el servicio público de MICrONS."
+        "Create a Neuroglancer link showing this neuron and its incoming and outgoing synapses. "
+        "The link stores a view state on the public MICrONS service."
     )
-    if st.button("Generar vista 3D", type="secondary"):
+    if st.button("Generate 3D view", type="secondary"):
         try:
             from nglui.statebuilder import helpers
 
-            with st.spinner("Preparando la vista en Neuroglancer…"):
+            with st.spinner("Preparing the Neuroglancer view..."):
                 viewer_client = CAVEclient(DATASTACK)
                 if isinstance(meta["materialization"], int):
                     viewer_client.version = meta["materialization"]
@@ -472,35 +564,61 @@ if "all_partners" in st.session_state:
                     return_as="url",
                 )
         except Exception as exc:
-            st.error("No se pudo generar el enlace de Neuroglancer.")
-            st.caption(f"Detalle técnico: {type(exc).__name__}")
+            st.error("Could not generate the Neuroglancer link.")
+            st.caption(f"Technical detail: {type(exc).__name__}")
 
     if st.session_state.get("neuroglancer_url"):
-        st.link_button("Abrir vista 3D en Neuroglancer", st.session_state["neuroglancer_url"])
+        st.link_button("Open 3D view in Neuroglancer", st.session_state["neuroglancer_url"])
 
     if st.session_state.get("annotation_warnings"):
         st.warning(
-            "No se pudieron cargar algunas anotaciones: "
+            "Some annotations could not be loaded: "
             + ", ".join(st.session_state["annotation_warnings"])
-            + ". La tabla de conexiones sigue disponible."
+            + ". The connectivity table is still available."
         )
 
     if shown_partners.empty:
-        st.warning("No hay socios que coincidan con los filtros.")
+        st.warning("No partners match the selected filters.")
     else:
-        st.subheader("Red alrededor de la neurona")
+        st.subheader("Neuron connectivity")
         st.caption(
-            "Cada fila es un socio. Las dos columnas muestran sinapsis en cada sentido; "
-            "el total se usa para ordenar la lista."
+            "Each row is a partner. The two columns show synapses in each direction; "
+            "the total is used to rank partners."
         )
         st.dataframe(shown_partners, hide_index=True, use_container_width=True)
         st.download_button(
-            "Descargar resultados CSV",
+            "Download results CSV",
             data=shown_partners.to_csv(index=False).encode("utf-8-sig"),
-            file_name=f"microns_red_{meta['root_id']}.csv",
+            file_name=f"microns_connectivity_{meta['root_id']}.csv",
             mime="text/csv",
         )
     st.caption(
-        "Las sinapsis son evidencia anatómica; su cantidad no equivale directamente a fuerza funcional. "
-        "El estado de proofreading indica qué partes de la reconstrucción fueron revisadas."
+        "Synapses provide anatomical evidence; their count is not a direct measure of functional strength. "
+        "Proofreading status indicates which parts of the reconstruction were reviewed."
     )
+
+if "group_per_neuron" in st.session_state:
+    group_meta = st.session_state["group_meta"]
+    st.header("Group analysis results")
+    st.caption(f"{len(group_meta['root_ids'])} neurons · datastack {DATASTACK} · materialization {group_meta['materialization']}")
+    group_manifest = {"format": "microns-mouse-tool-query-v1", "created_utc": datetime.now(timezone.utc).isoformat(),
+                      "datastack": DATASTACK, "materialization": group_meta["materialization"],
+                      "query": {"root_id": group_meta["root_ids"][0], "group_root_ids": group_meta["root_ids"],
+                                "comparison_root_id": None, "top_n": int(top_n), "min_synapses": int(min_synapses),
+                                "add_annotations": bool(add_annotations), "functional_match": functional_match,
+                                "class_filter": class_filter, "proofreading_filter": proofreading_filter,
+                                "cell_type_filter": cell_type_filter}}
+    st.download_button("Save group query settings and provenance (.json)", json.dumps(group_manifest, indent=2).encode("utf-8"),
+                       file_name="microns_group_query.json", mime="application/json", key="save_group_query")
+    st.subheader("Per-neuron summary")
+    st.dataframe(st.session_state["group_per_neuron"], hide_index=True, use_container_width=True)
+    st.download_button("Download per-neuron summary (.csv)", st.session_state["group_per_neuron"].to_csv(index=False).encode("utf-8-sig"),
+                       file_name="microns_group_neurons.csv", mime="text/csv", key="group_neurons_csv")
+    st.subheader("Partners across the group")
+    st.caption("Counts show how many queried neurons connect to each partner. Input and output are summarized separately.")
+    group_partners_view = st.session_state["group_partners"].copy()
+    if not group_partners_view.empty:
+        group_partners_view = group_partners_view[group_partners_view["Total synapses"] >= min_synapses].head(top_n)
+    st.dataframe(group_partners_view, hide_index=True, use_container_width=True)
+    st.download_button("Download group partner summary (.csv)", group_partners_view.to_csv(index=False).encode("utf-8-sig"),
+                       file_name="microns_group_partners.csv", mime="text/csv", key="group_partners_csv")
