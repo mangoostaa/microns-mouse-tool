@@ -37,7 +37,10 @@ Se inicia también desde PowerShell con `.\.venv\Scripts\python.exe -m streamlit
 - La app consulta conexiones de entrada y salida y ordena los socios por total de sinapsis.
 - Filtra por clase celular, estado de proofreading y texto del tipo celular (por ejemplo, `BC` o `23P`).
 - Activa el enriquecimiento para añadir clasificaciones y estado/estrategia de proofreading a los socios.
+- Genera un enlace de Neuroglancer para ver la neurona consultada y sus entradas/salidas en 3D.
 - Exporta a CSV la lista resultante después de aplicar los filtros.
+
+Generar la vista 3D guarda un estado visual (IDs y ubicaciones de sinapsis) en el servicio público de estados Neuroglancer de MICrONS para que el enlace pueda abrirse y compartirse.
 - Consulta y descarga los resultados como CSV.
 
 Las consultas usan la última materialización pública disponible en CAVE. Los socios se cuentan por número de sinapsis; este valor no equivale directamente a fuerza funcional. Para consistencia en análisis científicos, registra la versión de materialización indicada por la app.

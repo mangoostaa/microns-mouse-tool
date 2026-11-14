@@ -203,6 +203,34 @@ if "all_partners" in st.session_state:
         f"salidas {meta['outgoing_count']:,} / entradas {meta['incoming_count']:,}"
     )
 
+    st.subheader("Vista tridimensional")
+    st.caption(
+        "Genera un enlace de Neuroglancer con la neurona y sus sinapsis de entrada y salida. "
+        "El enlace guarda un estado visual en el servicio público de MICrONS."
+    )
+    if st.button("Generar vista 3D", type="secondary"):
+        try:
+            from nglui.statebuilder import helpers
+
+            with st.spinner("Preparando la vista en Neuroglancer…"):
+                viewer_client = CAVEclient(DATASTACK)
+                if isinstance(meta["materialization"], int):
+                    viewer_client.version = meta["materialization"]
+                st.session_state["neuroglancer_url"] = helpers.make_neuron_neuroglancer_link(
+                    viewer_client,
+                    int(meta["root_id"]),
+                    show_inputs=True,
+                    show_outputs=True,
+                    shorten=True,
+                    return_as="url",
+                )
+        except Exception as exc:
+            st.error("No se pudo generar el enlace de Neuroglancer.")
+            st.caption(f"Detalle técnico: {type(exc).__name__}")
+
+    if st.session_state.get("neuroglancer_url"):
+        st.link_button("Abrir vista 3D en Neuroglancer", st.session_state["neuroglancer_url"])
+
     if st.session_state.get("annotation_warnings"):
         st.warning(
             "No se pudieron cargar algunas anotaciones: "
