@@ -35,9 +35,11 @@ Se inicia también desde PowerShell con `.\.venv\Scripts\python.exe -m streamlit
 
 - Pega un `pt_root_id`; el ejemplo inicial pertenece al tutorial oficial.
 - La app consulta conexiones de entrada y salida y ordena los socios por total de sinapsis.
+- Introduce un segundo `pt_root_id` opcional para comparar socios de entrada/salida compartidos y el porcentaje de superposición.
 - Filtra por clase celular, estado de proofreading y texto del tipo celular (por ejemplo, `BC` o `23P`).
 - Activa el enriquecimiento para añadir clasificaciones y estado/estrategia de proofreading a los socios.
 - Consulta propiedades visuales asociadas a la neurona, como orientación/dirección preferida y selectividad; puedes elegir una correspondencia manual o automática.
+- Grafica el resumen visual de las neuronas con correspondencia funcional disponible (orientación preferida frente a selectividad; no es una curva completa de respuesta).
 - Genera un enlace de Neuroglancer para ver la neurona consultada y sus entradas/salidas en 3D.
 - Exporta a CSV la lista resultante después de aplicar los filtros.
 

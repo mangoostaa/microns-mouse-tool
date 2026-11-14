@@ -110,6 +110,35 @@ def query_functional_properties(client, root_id, property_table):
     return pd.concat(records, ignore_index=True)
 
 
+def build_comparison(primary_out, primary_in, comparison_out, comparison_in):
+    pairs = [
+        (primary_out, "post_pt_root_id", "A: salida"),
+        (primary_in, "pre_pt_root_id", "A: entrada"),
+        (comparison_out, "post_pt_root_id", "B: salida"),
+        (comparison_in, "pre_pt_root_id", "B: entrada"),
+    ]
+    summary = None
+    for synapses, partner_column, count_column in pairs:
+        counts = summarize_direction(synapses, partner_column, count_column)
+        summary = counts if summary is None else summary.merge(counts, on="ID socio", how="outer")
+    count_columns = ["A: salida", "A: entrada", "B: salida", "B: entrada"]
+    summary[count_columns] = summary[count_columns].fillna(0).astype("int64")
+    summary["En común"] = (
+        ((summary["A: salida"] > 0) & (summary["B: salida"] > 0))
+        | ((summary["A: entrada"] > 0) & (summary["B: entrada"] > 0))
+    ).map({True: "Sí", False: "No"})
+    summary["Total A"] = summary["A: salida"] + summary["A: entrada"]
+    summary["Total B"] = summary["B: salida"] + summary["B: entrada"]
+    return summary.sort_values(["En común", "Total A", "Total B"], ascending=[False, False, False])
+
+
+def jaccard_overlap(primary, comparison, partner_column):
+    primary_ids = set(primary[partner_column].dropna().tolist())
+    comparison_ids = set(comparison[partner_column].dropna().tolist())
+    union = primary_ids | comparison_ids
+    return len(primary_ids & comparison_ids), (len(primary_ids & comparison_ids) / len(union) if union else 0.0)
+
+
 st.set_page_config(page_title="MICrONS · Conexiones", page_icon="🧠", layout="wide")
 st.title("MICrONS · Explorador de conexiones")
 st.caption("Explora conexiones de entrada y salida, con anotaciones del conectoma del ratón.")
@@ -117,6 +146,7 @@ st.caption("Explora conexiones de entrada y salida, con anotaciones del conectom
 with st.sidebar:
     st.header("Consulta")
     root_id_text = st.text_input("ID de neurona (pt_root_id)", value=str(EXAMPLE_ID))
+    comparison_root_text = st.text_input("Comparar con otra neurona (opcional)", value="")
     top_n = st.slider("Mostrar socios", min_value=5, max_value=100, value=25, step=5)
     min_synapses = st.number_input("Mínimo de sinapsis totales por socio", min_value=1, max_value=100, value=1)
     add_annotations = st.checkbox(
@@ -161,10 +191,34 @@ st.markdown(
 if run_query:
     try:
         root_id = int(root_id_text.strip())
+        comparison_root_id = int(comparison_root_text.strip()) if comparison_root_text.strip() else None
+        if comparison_root_id == root_id:
+            raise ValueError("El ID de comparación debe ser distinto del ID principal.")
         with st.spinner("Consultando conexiones de entrada y salida…"):
             client = CAVEclient(DATASTACK)
             outgoing = client.materialize.synapse_query(pre_ids=root_id, remove_autapses=True)
             incoming = client.materialize.synapse_query(post_ids=root_id, remove_autapses=True)
+
+            comparison_outgoing = pd.DataFrame()
+            comparison_incoming = pd.DataFrame()
+            comparison_partners = pd.DataFrame()
+            comparison_metrics = None
+            comparison_functional = pd.DataFrame()
+            if comparison_root_id is not None:
+                comparison_outgoing = client.materialize.synapse_query(
+                    pre_ids=comparison_root_id, remove_autapses=True
+                )
+                comparison_incoming = client.materialize.synapse_query(
+                    post_ids=comparison_root_id, remove_autapses=True
+                )
+                comparison_partners = build_comparison(
+                    outgoing, incoming, comparison_outgoing, comparison_incoming
+                )
+                comparison_partners = comparison_partners[
+                    (comparison_partners["Total A"] + comparison_partners["Total B"]) >= min_synapses
+                ].reset_index(drop=True)
+                if add_annotations and not comparison_partners.empty:
+                    comparison_partners, _ = add_partner_annotations(client, comparison_partners)
 
             partners = summarize_direction(outgoing, "post_pt_root_id", "Sinapsis de salida")
             incoming_partners = summarize_direction(incoming, "pre_pt_root_id", "Sinapsis de entrada")
@@ -191,6 +245,31 @@ if run_query:
                 functional_properties = query_functional_properties(client, root_id, functional_table)
             except Exception as exc:
                 functional_warning = type(exc).__name__
+            comparison_functional_warning = None
+            if comparison_root_id is not None:
+                try:
+                    comparison_functional = query_functional_properties(
+                        client, comparison_root_id, functional_table
+                    )
+                except Exception as exc:
+                    comparison_functional_warning = type(exc).__name__
+
+                comparison_metrics = {
+                    "common_outgoing": len(
+                        set(outgoing["post_pt_root_id"].dropna())
+                        & set(comparison_outgoing["post_pt_root_id"].dropna())
+                    ),
+                    "common_incoming": len(
+                        set(incoming["pre_pt_root_id"].dropna())
+                        & set(comparison_incoming["pre_pt_root_id"].dropna())
+                    ),
+                    "outgoing_jaccard": jaccard_overlap(
+                        outgoing, comparison_outgoing, "post_pt_root_id"
+                    )[1],
+                    "incoming_jaccard": jaccard_overlap(
+                        incoming, comparison_incoming, "pre_pt_root_id"
+                    )[1],
+                }
 
         st.session_state["all_partners"] = partners
         st.session_state["query_meta"] = {
@@ -204,6 +283,11 @@ if run_query:
         st.session_state["functional_properties"] = functional_properties
         st.session_state["functional_warning"] = functional_warning
         st.session_state["functional_match"] = functional_match
+        st.session_state["comparison_root_id"] = comparison_root_id
+        st.session_state["comparison_partners"] = comparison_partners
+        st.session_state["comparison_metrics"] = comparison_metrics
+        st.session_state["comparison_functional"] = comparison_functional
+        st.session_state["comparison_functional_warning"] = comparison_functional_warning
     except ValueError:
         st.error("El ID debe ser un número entero (pt_root_id).")
     except Exception as exc:
@@ -246,53 +330,125 @@ if "all_partners" in st.session_state:
     functional_properties = st.session_state.get("functional_properties", pd.DataFrame())
     if functional_warning:
         st.warning(f"No se pudieron consultar las propiedades visuales ({functional_warning}).")
-    elif functional_properties.empty:
-        st.info(
-            "No encontramos un registro visual asociado con esta neurona usando la correspondencia seleccionada. "
-            "Prueba la opción automática o consulta otra neurona."
-        )
     else:
-        functional_columns = [
-            "session",
-            "scan_idx",
-            "unit_id",
-            "pref_ori",
-            "pref_dir",
-            "OSI",
-            "DSI",
-            "gOSI",
-            "gDSI",
-            "cc_abs",
-            "cc_norm",
-            "residual",
-            "score",
-        ]
-        functional_columns = [column for column in functional_columns if column in functional_properties.columns]
-        functional_table_view = functional_properties[functional_columns].copy()
-        if "cc_abs" in functional_table_view.columns:
-            functional_table_view = functional_table_view.sort_values("cc_abs", ascending=False)
-        functional_table_view = functional_table_view.rename(
-            columns={
-                "session": "Sesión",
-                "scan_idx": "Escaneo",
-                "unit_id": "Registro",
-                "pref_ori": "Orientación preferida (°)",
-                "pref_dir": "Dirección preferida (°)",
-                "OSI": "Selectividad de orientación (OSI)",
-                "DSI": "Selectividad de dirección (DSI)",
-                "gOSI": "Selectividad global de orientación",
-                "gDSI": "Selectividad global de dirección",
-                "cc_abs": "Ajuste del modelo (cc_abs)",
-                "cc_norm": "Ajuste normalizado (cc_norm)",
-                "residual": "Error de correspondencia (µm)",
-                "score": "Separación de correspondencia (µm)",
-            }
-        )
-        st.dataframe(functional_table_view, hide_index=True, use_container_width=True)
+        if functional_properties.empty:
+            st.info(
+                "No encontramos un registro visual asociado con esta neurona usando la correspondencia seleccionada. "
+                "Prueba la opción automática o consulta otra neurona."
+            )
+        else:
+            functional_columns = [
+                "session",
+                "scan_idx",
+                "unit_id",
+                "pref_ori",
+                "pref_dir",
+                "OSI",
+                "DSI",
+                "gOSI",
+                "gDSI",
+                "cc_abs",
+                "cc_norm",
+                "residual",
+                "score",
+            ]
+            functional_columns = [column for column in functional_columns if column in functional_properties.columns]
+            functional_table_view = functional_properties[functional_columns].copy()
+            if "cc_abs" in functional_table_view.columns:
+                functional_table_view = functional_table_view.sort_values("cc_abs", ascending=False)
+            functional_table_view = functional_table_view.rename(
+                columns={
+                    "session": "Sesión",
+                    "scan_idx": "Escaneo",
+                    "unit_id": "Registro",
+                    "pref_ori": "Orientación preferida (°)",
+                    "pref_dir": "Dirección preferida (°)",
+                    "OSI": "Selectividad de orientación (OSI)",
+                    "DSI": "Selectividad de dirección (DSI)",
+                    "gOSI": "Selectividad global de orientación",
+                    "gDSI": "Selectividad global de dirección",
+                    "cc_abs": "Ajuste del modelo (cc_abs)",
+                    "cc_norm": "Ajuste normalizado (cc_norm)",
+                    "residual": "Error de correspondencia (µm)",
+                    "score": "Separación de correspondencia (µm)",
+                }
+            )
+            st.dataframe(functional_table_view, hide_index=True, use_container_width=True)
+            st.caption(
+                "La orientación preferida indica el ángulo de patrón visual; la dirección preferida indica hacia dónde se mueve. "
+                "Si hay varios registros, se muestran todos. Las medidas describen la respuesta modelada, no una grabación en vivo."
+            )
+
+        visual_points = []
+        response_sets = [("Neurona A", functional_properties)]
+        if st.session_state.get("comparison_root_id") is not None:
+            response_sets.append(("Neurona B", st.session_state.get("comparison_functional", pd.DataFrame())))
+        for neuron_label, response_table in response_sets:
+            if response_table.empty or "pref_ori" not in response_table.columns:
+                continue
+            strength_column = "gOSI" if "gOSI" in response_table.columns else "OSI"
+            if strength_column not in response_table.columns:
+                continue
+            points = response_table[["pref_ori", strength_column]].copy()
+            points = points.rename(
+                columns={"pref_ori": "Orientación preferida (°)", strength_column: "Selectividad"}
+            )
+            points["Neurona"] = neuron_label
+            visual_points.append(points)
+        if visual_points:
+            st.markdown("**Resumen visual**")
+            st.scatter_chart(
+                pd.concat(visual_points, ignore_index=True),
+                x="Orientación preferida (°)",
+                y="Selectividad",
+                color="Neurona",
+                x_label="Orientación preferida (grados)",
+                y_label="Selectividad de orientación",
+            )
+            st.caption(
+                "Cada punto es un registro funcional. El gráfico compara orientaciones preferidas y selectividad; "
+                "no representa una curva completa de respuesta a todos los estímulos."
+            )
+
+    comparison_root_id = st.session_state.get("comparison_root_id")
+    if comparison_root_id is not None:
+        st.subheader("Comparar conexiones con otra neurona")
+        comparison_metrics = st.session_state["comparison_metrics"]
+        metrics_cols = st.columns(4)
+        metrics_cols[0].metric("Socios de salida en común", comparison_metrics["common_outgoing"])
+        metrics_cols[1].metric("Coincidencia de salidas", f"{comparison_metrics['outgoing_jaccard']:.0%}")
+        metrics_cols[2].metric("Socios de entrada en común", comparison_metrics["common_incoming"])
+        metrics_cols[3].metric("Coincidencia de entradas", f"{comparison_metrics['incoming_jaccard']:.0%}")
         st.caption(
-            "La orientación preferida indica el ángulo de patrón visual; la dirección preferida indica hacia dónde se mueve. "
-            "Si hay varios registros, se muestran todos. Las medidas describen la respuesta modelada, no una grabación en vivo."
+            f"A = {meta['root_id']} · B = {comparison_root_id}. "
+            "El porcentaje mide cuánto se superponen las listas de socios de cada dirección."
         )
+
+        comparison_view = st.session_state["comparison_partners"].copy()
+        if add_annotations and class_filter != "Todas" and "Clase celular" in comparison_view:
+            comparison_view = comparison_view[comparison_view["Clase celular"] == class_filter]
+        if add_annotations and proofreading_filter != "Todos":
+            if proofreading_filter in ["Axón revisado", "Ambos revisados"] and "Axón revisado" in comparison_view:
+                comparison_view = comparison_view[comparison_view["Axón revisado"] == "Sí"]
+            if proofreading_filter in ["Dendrita revisada", "Ambos revisados"] and "Dendrita revisada" in comparison_view:
+                comparison_view = comparison_view[comparison_view["Dendrita revisada"] == "Sí"]
+        if add_annotations and cell_type_filter.strip() and "Tipo celular" in comparison_view:
+            comparison_view = comparison_view[
+                comparison_view["Tipo celular"].str.contains(cell_type_filter.strip(), case=False, na=False)
+            ]
+        comparison_view = comparison_view.sort_values(
+            ["En común", "Total A", "Total B"], ascending=[False, False, False]
+        ).head(top_n)
+        if comparison_view.empty:
+            st.warning("No se encontraron socios compartidos o exclusivos con esos filtros.")
+        else:
+            st.dataframe(comparison_view, hide_index=True, use_container_width=True)
+            st.download_button(
+                "Descargar comparación CSV",
+                data=comparison_view.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"microns_comparacion_{meta['root_id']}_{comparison_root_id}.csv",
+                mime="text/csv",
+            )
 
     st.subheader("Vista tridimensional")
     st.caption(
